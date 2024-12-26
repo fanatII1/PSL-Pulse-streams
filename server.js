@@ -10,20 +10,18 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { Expo } from 'expo-server-sdk';
+import { Client, Databases } from "node-appwrite";
 
 dotenv.config();
 uuidv4();
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const mailjet = new Mailjet({
-    apiKey: process.env.MJ_APIKEY_PUBLIC || 'your-api-key',
-    apiSecret: process.env.MJ_APIKEY_PRIVATE || 'your-api-secret'
-});
 
-// Set up storage for uploaded files
+//utils
 const storage = multer.diskStorage({
 destination: (req, file, cb) => {
 cb(null, 'uploads/');
@@ -34,10 +32,23 @@ cb(null, Date.now() + '-' + file.originalname);
 });
 const upload = multer({ storage: storage });
 
-// Create a new Expo SDK client
-// optionally providing an access token if you have enabled push security
-let expo = new Expo({
+
+//SDK's
+const appwriteClient = new Client();
+appwriteClient
+    .setEndpoint(process.env.EXPO_PUBLIC_ENDPOINT)
+    .setProject(process.env.EXPO_PUBLIC_PROJECT_ID)
+    .setKey(process.env.EXPO_API_ENDPOINT);
+
+const databases = new Databases(appwriteClient);
+
+const expoNotifications = new Expo({
   useFcmV1: true,
+});
+
+const mailjet = new Mailjet({
+  apiKey: process.env.MJ_APIKEY_PUBLIC || 'your-api-key',
+  apiSecret: process.env.MJ_APIKEY_PRIVATE || 'your-api-secret'
 });
 
 // Store push tokens for users (ideally in a database)
@@ -140,14 +151,13 @@ app.get('/getVideo', (req, res) => {
 
 //handle webhooks coming from contentful that notifies us if there is a new video or new article
 app.post('/webhook/contentful', async (req, res) => {
-  // console.log(req.body)
   const { fields } = req.body;
   const { title, article } = fields;
   const articleTitle = title['en-US'];
   const articleText = article['en-US'];
   const articleParagraph = articleText.content[0].content[0].value;
 
-  //limit number of words to 9 for the notifcation body
+  //limit number of words to nine for the notifcation body
   const getFirstNineWords = (str) => str.split(' ').slice(0, 9).join(' ');
   const firstNineWords = getFirstNineWords(articleParagraph);
   console.log(articleTitle, articleParagraph, '\n', firstNineWords)
@@ -170,19 +180,25 @@ app.post('/webhook/contentful', async (req, res) => {
   }
 });
 
-// Function to send push notifications
+// Function to send push notifications to users
 async function sendPushNotifications(message) {
+  const users = await databases.listDocuments(
+    process.env.EXPO_PUBLIC_DATABASE_ID,
+    process.env.EXPO_PUBLIC_USER_COLLECTION_ID,
+  );
+  const usersData = users.documents;
   let messages = [];
+  console.log(users)
 
   // Check that all your push tokens appear to be valid Expo push tokens
-  for (let pushToken of pushTokens) {
-    if (!Expo.isExpoPushToken(pushToken)) {
-      console.error(`Invalid push token: ${pushToken}`);
+  for (let userData of usersData) {
+    if (!Expo.isExpoPushToken(userData.pushToken)) {
+      console.error(`Invalid push token: ${userData.pushToken}`);
       continue;
     }
 
     messages.push({
-      to: pushToken,
+      to: userData.pushToken,
       title: message.title,
       body: message.body,
       data: message.data,
@@ -194,11 +210,11 @@ async function sendPushNotifications(message) {
   // recommend you batch your notifications to reduce the number of requests
   // and to compress them (notifications with similar content will get
   // compressed).
-  let chunks = expo.chunkPushNotifications(messages);
+  let chunks = expoNotifications.chunkPushNotifications(messages);
   let tickets = [];
   for (let chunk of chunks) {
     try {
-      let ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+      let ticketChunk = await expoNotifications.sendPushNotificationsAsync(chunk);
       tickets.push(...ticketChunk);
     } catch (error) {
       console.error('Error sending push notifications:', error);
