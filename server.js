@@ -9,7 +9,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-
+import { Expo } from 'expo-server-sdk';
 
 dotenv.config();
 uuidv4();
@@ -23,8 +23,6 @@ const mailjet = new Mailjet({
     apiSecret: process.env.MJ_APIKEY_PRIVATE || 'your-api-secret'
 });
 
-// console.log(process.env.MJ_APIKEY_PUBLIC,)
-
 // Set up storage for uploaded files
 const storage = multer.diskStorage({
 destination: (req, file, cb) => {
@@ -34,9 +32,17 @@ filename: (req, file, cb) => {
 cb(null, Date.now() + '-' + file.originalname);
 }
 });
-
-// Create the multer instance
 const upload = multer({ storage: storage });
+
+// Create a new Expo SDK client
+// optionally providing an access token if you have enabled push security
+let expo = new Expo({
+  useFcmV1: true,
+});
+
+// Store push tokens for users (ideally in a database)
+const pushTokens = ["ExponentPushToken[xxxxxxxxxx]",];
+
 
 app.use(cors());
 app.use(bodyParser.json());
@@ -92,7 +98,10 @@ app.post('/upload', upload.single('video'), (req, res) => {
 
     // Check if output directory exists, create if not
     if (!fs.existsSync(outputDir)) {
+        console.log('does not exist')
         fs.mkdirSync(outputDir, { recursive: true });
+    } else {
+      console.log('existing')
     }
 
     // Command to convert video to HLS format using ffmpeg
@@ -128,6 +137,74 @@ app.get('/getVideo', (req, res) => {
   console.log(title, " ", videoUrl)
   res.json({ title: title, url: videoUrl });
 });
+
+//handle webhooks coming from contentful that notifies us if there is a new video or new article
+app.post('/webhook/contentful', async (req, res) => {
+  // console.log(req.body)
+  const { fields } = req.body;
+  const { title, article } = fields;
+  const articleTitle = title['en-US'];
+  const articleText = article['en-US'];
+  const articleParagraph = articleText.content[0].content[0].value;
+
+  //limit number of words to 9 for the notifcation body
+  const getFirstNineWords = (str) => str.split(' ').slice(0, 9).join(' ');
+  const firstNineWords = getFirstNineWords(articleParagraph);
+  console.log(articleTitle, articleParagraph, '\n', firstNineWords)
+
+
+  try {
+    const message = {
+      title: articleTitle,
+      body: `${articleParagraph} ...`,
+      // data: { url },
+    };
+
+    // Send push notifications
+    await sendPushNotifications(message);
+
+    res.status(200).send('Notification sent successfully.');
+  } catch (error) {
+    console.error('Error handling webhook:', error);
+    res.status(500).send('Failed to handle webhook.');
+  }
+});
+
+// Function to send push notifications
+async function sendPushNotifications(message) {
+  let messages = [];
+
+  // Check that all your push tokens appear to be valid Expo push tokens
+  for (let pushToken of pushTokens) {
+    if (!Expo.isExpoPushToken(pushToken)) {
+      console.error(`Invalid push token: ${pushToken}`);
+      continue;
+    }
+
+    messages.push({
+      to: pushToken,
+      title: message.title,
+      body: message.body,
+      data: message.data,
+    });
+  }
+
+  // The Expo push notification service accepts batches of notifications so
+  // that you don't need to send 1000 requests to send 1000 notifications. We
+  // recommend you batch your notifications to reduce the number of requests
+  // and to compress them (notifications with similar content will get
+  // compressed).
+  let chunks = expo.chunkPushNotifications(messages);
+  let tickets = [];
+  for (let chunk of chunks) {
+    try {
+      let ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+      tickets.push(...ticketChunk);
+    } catch (error) {
+      console.error('Error sending push notifications:', error);
+    }
+  }
+}
 
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
