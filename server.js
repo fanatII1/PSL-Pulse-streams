@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { Expo } from 'expo-server-sdk';
-import { Client, Databases } from "node-appwrite";
+import { Client, Databases, Query } from 'node-appwrite';
 
 dotenv.config();
 uuidv4();
@@ -52,12 +52,12 @@ const mailjet = new Mailjet({
 });
 
 // Store push tokens for users (ideally in a database)
-const pushTokens = ["ExponentPushToken[xxxxxxxxxx]",];
+const pushTokens = ['ExponentPushToken[xxxxxxxxxx]',];
 
 
 app.use(cors());
 app.use(bodyParser.json());
-app.use("/public", express.static(path.join(__dirname, "public")));
+app.use('/public', express.static(path.join(__dirname, 'public')));
 
 app.post('/send-email', (req, res) => {
     const { emailForm } = req.body;
@@ -77,11 +77,11 @@ app.post('/send-email', (req, res) => {
               },
               To: [
                 {
-                  Email: "mandlankosi739@gmail.com",
-                  Name: "Mandlenkosi First Touch"
+                  Email: 'mandlankosi739@gmail.com',
+                  Name: 'Mandlenkosi First Touch'
                 }
               ],
-              Subject: "First Touch Contact",
+              Subject: 'First Touch Contact',
               TextPart: message,
             }
           ]
@@ -145,24 +145,27 @@ app.get('/getVideo', (req, res) => {
       return res.status(404).json({ error: 'Chapter not found' });
   }
   const { title, videoUrl } = chapters[chapterId];
-  console.log(title, " ", videoUrl)
+  console.log(title, ' ', videoUrl)
   res.json({ title: title, url: videoUrl });
 });
 
 //handle webhooks coming from contentful that notifies us if there is a new video or new article
 app.post('/webhook/contentful', async (req, res) => {
-  const { fields } = req.body;
+  const { fields, metadata } = req.body;
   const { title, article } = fields;
   const articleTitle = title['en-US'];
   const articleText = article['en-US'];
   const articleParagraph = articleText.content[0].content[0].value;
+  const tags = metadata.tags;
 
-  //limit number of words to nine for the notifcation body
-  const getFirstNineWords = (str) => str.split(' ').slice(0, 9).join(' ');
-  const firstNineWords = getFirstNineWords(articleParagraph);
-  console.log(articleTitle, articleParagraph, '\n', firstNineWords)
+  console.log(req.body)
 
-
+  /*  
+    We extract the articles data that will be used as the notification title and body.
+    Then we send notifications only if the article has a tag (tag can be a string with Club name or Breaking News).
+    IF the tag is 'breakingNews', we send notifications to all users.
+    IF NOT, then we send the notifications to users who follow the specific club(s) that are tagged on the article.
+  */
   try {
     const message = {
       title: articleTitle,
@@ -170,10 +173,39 @@ app.post('/webhook/contentful', async (req, res) => {
       // data: { url },
     };
 
-    // Send push notifications
-    await sendPushNotifications(message);
+    if(tags.length >= 1){
+      const isTagBreakingNews = tags.some(tags => tags.sys.id === 'breakingNews');
+      console.log(tags, isTagBreakingNews)
 
-    res.status(200).send('Notification sent successfully.');
+      if(isTagBreakingNews){
+        const users = await databases.listDocuments(
+          process.env.EXPO_PUBLIC_DATABASE_ID,
+          process.env.EXPO_PUBLIC_USER_COLLECTION_ID,
+        );
+        console.log('NO CLUBS')
+
+        await sendPushNotifications(users, message);
+        res.status(200).send('Notification sent successfully.');
+      } 
+      else {
+        const followedClubTags = tags.filter(tag => tag !== 'breakingNews');
+        const users = await databases.listDocuments(
+          process.env.EXPO_PUBLIC_DATABASE_ID,
+          process.env.EXPO_PUBLIC_USER_COLLECTION_ID,
+          Query.equal('followingClubs', followedClubTags)
+        );
+
+        console.log('CLUBS')
+
+        if(users){
+          await sendPushNotifications(users, message);
+          res.status(200).send('Notification sent successfully.');
+        }
+        else {
+          res.status(404).send('No users');
+        }
+      }
+    }
   } catch (error) {
     console.error('Error handling webhook:', error);
     res.status(500).send('Failed to handle webhook.');
@@ -181,14 +213,9 @@ app.post('/webhook/contentful', async (req, res) => {
 });
 
 // Function to send push notifications to users
-async function sendPushNotifications(message) {
-  const users = await databases.listDocuments(
-    process.env.EXPO_PUBLIC_DATABASE_ID,
-    process.env.EXPO_PUBLIC_USER_COLLECTION_ID,
-  );
+async function sendPushNotifications(users, message) {
   const usersData = users.documents;
   let messages = [];
-  console.log(users)
 
   // Check that all your push tokens appear to be valid Expo push tokens
   for (let userData of usersData) {
