@@ -249,6 +249,12 @@ async function sendPushNotifications(users, message) {
   }
 }
 
+
+app.get('/reset', (req, res) => {
+  const { userId, secret } = req.query;
+  res.redirect(`first-touch://updatePassword?userId=${userId}&secret=${secret}`);
+});
+
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
