@@ -59,6 +59,10 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
+app.get('/', (req, res) => {
+  return res.status(200).json({message: '...', 'errors': []})
+})
+
 app.post('/send-email', (req, res) => {
     const { emailForm } = req.body;
     const { email, username, message } = emailForm;
