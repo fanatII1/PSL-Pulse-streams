@@ -10,5 +10,15 @@
     "node-appwrite": "^11.1.1",
     "node-mailjet": "^6.0.6",
     "uuid": "^11.0.2"
-  }
+  },
+  "scripts": {
+    "start": "nodemon server.js"
+  },
+  "name": "backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "devDependencies": {},
+  "author": "",
+  "license": "ISC",
+  "description": ""
 }
